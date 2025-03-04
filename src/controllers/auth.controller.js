@@ -47,7 +47,7 @@ const register = async (req, res) => {
       refreshToken
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error registering user', error: error.message });
+    res.status(500).json({ message: 'Error in registering user', error: error.message });
   }
 };
 
