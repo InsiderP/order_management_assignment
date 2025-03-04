@@ -5,7 +5,7 @@ const { verifyToken } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
-// Validation middleware
+
 const orderValidation = [
   body('items').isArray().withMessage('Items must be an array'),
   body('items.*.productId').notEmpty().withMessage('Product ID is required'),
@@ -19,7 +19,7 @@ const orderValidation = [
   body('shippingAddress.country').notEmpty().withMessage('Country is required')
 ];
 
-// Routes
+
 router.post('/', verifyToken, orderValidation, createOrder);
 router.get('/:id', verifyToken, getOrder);
 

@@ -1,14 +1,30 @@
 const Redis = require('redis');
+const winston = require('winston');
 
-class RedisService {
+const log = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.simple()
+    })
+  ]
+});
+
+class CacheService {
   constructor() {
     this.client = Redis.createClient({
       host: process.env.REDIS_HOST,
       port: process.env.REDIS_PORT
     });
 
-    this.client.on('error', (err) => console.error('Redis Client Error', err));
-    this.client.on('connect', () => console.log('Connected to Redis'));
+    this.client.on('error', (err) => log.error('Redis error:', err));
+    this.client.on('connect', () => log.info('Connected to Redis'));
   }
 
   async connect() {
@@ -19,39 +35,39 @@ class RedisService {
     await this.client.disconnect();
   }
 
-  async setOrder(orderId, orderData, expirationTime = 600) {
+  async setOrder(orderId, orderData, ttl = 600) {
     try {
       await this.client.set(
         `order:${orderId}`,
         JSON.stringify(orderData),
-        { EX: expirationTime }
+        { EX: ttl }
       );
       return true;
-    } catch (error) {
-      console.error('Redis set error:', error);
+    } catch (err) {
+      log.error('Redis set error:', err);
       return false;
     }
   }
 
   async getOrder(orderId) {
     try {
-      const orderData = await this.client.get(`order:${orderId}`);
-      return orderData ? JSON.parse(orderData) : null;
-    } catch (error) {
-      console.error('Redis get error:', error);
+      const data = await this.client.get(`order:${orderId}`);
+      return data ? JSON.parse(data) : null;
+    } catch (err) {
+      log.error('Redis get error:', err);
       return null;
     }
   }
 
-  async deleteOrder(orderId) {
+  async removeOrder(orderId) {
     try {
       await this.client.del(`order:${orderId}`);
       return true;
-    } catch (error) {
-      console.error('Redis delete error:', error);
+    } catch (err) {
+      log.error('Redis delete error:', err);
       return false;
     }
   }
 }
 
-module.exports = new RedisService(); 
+module.exports = new CacheService(); 

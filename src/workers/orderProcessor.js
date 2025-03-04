@@ -1,109 +1,136 @@
 require('dotenv').config();
-const AWS = require('aws-sdk');
 const Order = require('../models/order.model');
 const redisService = require('../services/redis.service');
-const awsService = require('../services/aws.service');
+const queueService = require('../services/aws.service');
+const winston = require('winston');
 
-class OrderProcessor {
+
+const log = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.Console({
+      format: winston.format.simple()
+    })
+  ]
+});
+
+class OrderHandler {
   constructor() {
-    this.sqs = new AWS.SQS({
-      region: process.env.AWS_REGION,
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    });
-
-    this.queueUrl = process.env.AWS_SQS_QUEUE_URL;
+    this.running = false;
+    this.waitTime = 5000;
   }
 
   async start() {
-    console.log('Starting order processor...');
-    this.pollQueue();
+    if (this.running) {
+      log.warn('Already running');
+      return;
+    }
+
+    this.running = true;
+    log.info('Starting order handler');
+    await this.checkQueue();
   }
 
-  async pollQueue() {
-    try {
-      const params = {
-        QueueUrl: this.queueUrl,
-        MaxNumberOfMessages: 10,
-        WaitTimeSeconds: 20
-      };
+  async stop() {
+    this.running = false;
+    log.info('Stopping order handler');
+  }
 
-      const data = await this.sqs.receiveMessage(params).promise();
-      
-      if (data.Messages) {
-        for (const message of data.Messages) {
-          await this.processMessage(message);
+  async checkQueue() {
+    while (this.running) {
+      try {
+        const messages = await queueService.getMessages();
+        
+        if (messages.length > 0) {
+          log.info(`Found ${messages.length} orders to process`);
+          await this.handleOrders(messages);
         }
+      } catch (err) {
+        log.error('Queue check failed:', err);
+        await this.handleError(err);
       }
-
-      // Continue polling
-      this.pollQueue();
-    } catch (error) {
-      console.error('Error polling queue:', error);
-      // Retry after delay
-      setTimeout(() => this.pollQueue(), 5000);
     }
   }
 
-  async processMessage(message) {
-    try {
-      const orderData = JSON.parse(message.Body);
-      const order = await Order.findById(orderData.orderId);
-
-      if (!order) {
-        throw new Error('Order not found');
+  async handleOrders(messages) {
+    for (const msg of messages) {
+      try {
+        await this.handleOrder(msg);
+      } catch (err) {
+        log.error(`Failed to process order ${msg.MessageId}:`, err);
+        await this.handleError(err);
       }
-
-      // Update order status to processing
-      order.status = 'processing';
-      await order.save();
-
-      // Simulate order processing (replace with actual business logic)
-      await this.simulateOrderProcessing(order);
-
-      // Update order status to processed
-      order.status = 'processed';
-      order.paymentStatus = 'completed';
-      await order.save();
-
-      // Update Redis cache
-      await redisService.setOrder(order._id.toString(), order);
-
-      // Send confirmation email
-      await awsService.sendOrderConfirmation(order, orderData.userEmail);
-
-      // Delete message from queue
-      await this.sqs.deleteMessage({
-        QueueUrl: this.queueUrl,
-        ReceiptHandle: message.ReceiptHandle
-      }).promise();
-
-      console.log(`Order ${order._id} processed successfully`);
-    } catch (error) {
-      console.error(`Error processing order ${orderData.orderId}:`, error);
-      
-      // Update order status to failed
-      const order = await Order.findById(orderData.orderId);
-      if (order) {
-        order.status = 'failed';
-        order.errorMessage = error.message;
-        await order.save();
-      }
-
-      // Delete message from queue
-      await this.sqs.deleteMessage({
-        QueueUrl: this.queueUrl,
-        ReceiptHandle: message.ReceiptHandle
-      }).promise();
     }
   }
 
-  async simulateOrderProcessing(order) {
-    // Simulate processing delay
+  async handleOrder(msg) {
+    const data = JSON.parse(msg.Body);
+    log.info(`Processing order: ${data.orderId}`);
+
+    const order = await Order.findById(data.orderId);
+    if (!order) {
+      throw new Error(`Order ${data.orderId} not found`);
+    }
+
+    order.status = 'processing';
+    await order.save();
+    log.info(`Order ${order._id} is now processing`);
+
+    await this.processOrder(order);
+
+    order.status = 'processed';
+    order.paymentStatus = 'completed';
+    await order.save();
+    log.info(`Order ${order._id} is now processed`);
+
+    await redisService.setOrder(order._id.toString(), order);
+    log.info(`Order ${order._id} cached`);
+
+    await queueService.sendOrderMail(order, data.userEmail);
+    log.info(`Sent confirmation for order ${order._id}`);
+
+    await queueService.removeMessage(msg.ReceiptHandle);
+    log.info(`Removed message ${msg.MessageId}`);
+
+    log.info(`Order ${order._id} done`);
+  }
+
+  async processOrder(order) {
     await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
+  async handleError(err) {
+    log.error('Error:', err);
+    if (this.running) {
+      log.info(`Retrying in ${this.waitTime}ms...`);
+      await new Promise(resolve => setTimeout(resolve, this.waitTime));
+    }
   }
 }
 
-// Start the order processor
-const processor = new OrderProcessor();
-processor.start().catch(console.error); 
+
+const handler = new OrderHandler();
+
+
+process.on('SIGTERM', async () => {
+  log.info('Shutting down...');
+  await handler.stop();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  log.info('Shutting down...');
+  await handler.stop();
+  process.exit(0);
+});
+
+handler.start().catch(err => {
+  log.error('Fatal error:', err);
+  process.exit(1);
+}); 

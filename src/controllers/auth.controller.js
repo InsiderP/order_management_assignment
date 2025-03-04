@@ -21,13 +21,13 @@ const register = async (req, res) => {
   try {
     const { email, password, name } = req.body;
 
-    // Check if user already exists
+   
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
-    // Create new user
+ 
     const user = new User({
       email,
       password,
@@ -36,7 +36,7 @@ const register = async (req, res) => {
 
     await user.save();
 
-    // Generate tokens
+   
     const { accessToken, refreshToken } = generateTokens(user._id);
     user.refreshToken = refreshToken;
     await user.save();
@@ -55,19 +55,19 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Find user
+    
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Verify password
+    
     const isValidPassword = await user.comparePassword(password);
     if (!isValidPassword) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Generate tokens
+    
     const { accessToken, refreshToken } = generateTokens(user._id);
     user.refreshToken = refreshToken;
     await user.save();
@@ -86,7 +86,7 @@ const refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
 
-    // Verify refresh token
+
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
     const user = await User.findById(decoded.userId);
 
@@ -94,7 +94,7 @@ const refreshToken = async (req, res) => {
       return res.status(401).json({ message: 'Invalid refresh token' });
     }
 
-    // Generate new tokens
+    
     const tokens = generateTokens(user._id);
     user.refreshToken = tokens.refreshToken;
     await user.save();

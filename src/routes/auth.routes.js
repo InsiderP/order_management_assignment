@@ -5,7 +5,7 @@ const { verifyRefreshToken } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
-// Validation middleware
+
 const registerValidation = [
   body('email').isEmail().withMessage('Please enter a valid email'),
   body('password')
@@ -19,7 +19,7 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required')
 ];
 
-// Routes
+
 router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
 router.post('/refresh', verifyRefreshToken, refreshToken);
